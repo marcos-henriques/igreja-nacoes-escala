@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Escala - Igreja às Nações</title>
+    <!-- Tailwind via CDN com carregamento otimizado -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome com carregamento assíncrono -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" media="print" onload="this.media='all'">
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, addDoc, deleteDoc, serverTimestamp, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'igreja-nacoes-escala';
+
+        let currentUser = null;
+        let escalaDados = [];
+        let searchTerm = "";
+
+        // Lista de servos baseada no seu cadastro para importação rápida
+        const dadosIniciais = [
+            { data: "07/12/2025", culto: "Celebração 07h", local: "Templo", servo: "Clarina Moraes", setor: "Responsável" },
+            { data: "07/12/2025", culto: "Celebração 07h", local: "Altar", servo: "Pra. Norma", setor: "Dirigente Oferta" },
+            { data: "07/12/2025", culto: "Celebração 17h", local: "Recepção", servo: "Alessandro Matias", setor: "Apoio" },
+            { data: "07/12/2025", culto: "Celebração 17h", local: "Nave", servo: "Monica Regina", setor: "Supervisão" },
+            { data: "11/12/2025", culto: "Quinta 19h30", local: "Templo", servo: "Amelia Garcia", setor: "Intercessão" }
+        ];
+
+        async function initApp() {
+            try {
+                // Tentativa de login rápido
+                const loginPromise = typeof __initial_auth_token !== 'undefined' && __initial_auth_token 
+                    ? signInWithCustomToken(auth, __initial_auth_token)
+                    : signInAnonymously(auth);
+                
+                await loginPromise;
+                
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUser = user;
+                        setupListeners();
+                    }
+                });
+            } catch (error) {
+                console.error("Erro na inicialização:", error);
+                document.getElementById('main-content').innerHTML = `<div class="p-8 text-center text-red-500 font-bold">Erro de conexão. Verifique sua internet.</div>`;
+            }
+        }
+
+        function setupListeners() {
+            const escalaRef = collection(db, 'artifacts', appId, 'public', 'data', 'escalas');
+            onSnapshot(escalaRef, (snapshot) => {
+                escalaDados = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                escalaDados.sort((a, b) => {
+                    const dataA = a.data.split('/').reverse().join('-');
+                    const dataB = b.data.split('/').reverse().join('-');
+                    return new Date(dataA) - new Date(dataB);
+                });
+                renderContent(getActiveTab());
+            }, (error) => {
+                console.error("Erro no Firestore:", error);
+            });
+        }
+
+        function getActiveTab() {
+            const active = document.querySelector('.nav-tab.active-tab');
+            return active ? active.dataset.tab : 'home';
+        }
+
+        window.importarDadosManual = async () => {
+            if (!confirm("Deseja carregar a escala inicial?")) return;
+            const batch = writeBatch(db);
+            dadosIniciais.forEach((item) => {
+                const docRef = doc(collection(db, 'artifacts', appId, 'public', 'data', 'escalas'));
+                batch.set(docRef, { ...item, status: "Pendente", createdAt: serverTimestamp() });
+            });
+            await batch.commit();
+            showToast("Dados Importados!");
+        };
+
+        window.confirmarPresenca = async (escalaId) => {
+            if (!currentUser) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'escalas', escalaId);
+            await setDoc(docRef, { status: 'Confirmado', confirmadoEm: new Date().toISOString() }, { merge: true });
+            showToast("Presença Confirmada!");
+        };
+
+        window.updateSearch = (val) => {
+            searchTerm = val.toLowerCase();
+            renderContent('escala');
+        };
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.classList.remove('hidden');
+            setTimeout(() => t.classList.add('hidden'), 3000);
+        }
+
+        window.renderContent = (tab) => {
+            const main = document.getElementById('main-content');
+            
+            if (tab === 'home') {
+                const confirmados = escalaDados.filter(i => i.status === 'Confirmado').length;
+                const total = escalaDados.length;
+                const perc = total > 0 ? Math.round((confirmados / total) * 100) : 0;
+
+                main.innerHTML = `
+                    <div class="animate-fade-in space-y-6">
+                        <section class="grid grid-cols-2 gap-4">
+                            <div class="bg-white p-6 rounded-[30px] shadow-sm border border-gray-100">
+                                <p class="text-[9px] font-black text-blue-500 uppercase tracking-widest mb-1">Confirmados</p>
+                                <p class="text-3xl font-black text-gray-900">${confirmados}<span class="text-sm font-medium text-gray-300">/${total}</span></p>
+                            </div>
+                            <div class="bg-white p-6 rounded-[30px] shadow-sm border border-gray-100">
+                                <p class="text-[9px] font-black text-green-500 uppercase tracking-widest mb-1">Progresso</p>
+                                <p class="text-3xl font-black text-gray-900">${perc}%</p>
+                            </div>
+                        </section>
+
+                        <section class="bg-indigo-950 rounded-[40px] p-8 text-white shadow-xl relative overflow-hidden">
+                            <div class="relative z-10">
+                                <h2 class="text-2xl font-black mb-1 tracking-tighter italic">Igreja às Nações</h2>
+                                <p class="text-[10px] opacity-70 font-bold uppercase tracking-widest">M.A.N. Digital • 2025</p>
+                            </div>
+                            <i class="fa-solid fa-church absolute -right-6 -bottom-6 opacity-10 text-[150px]"></i>
+                        </section>
+
+                        <section class="space-y-3">
+                            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] px-2 mb-2">Painel Marcos</h3>
+                            <button onclick="importarDadosManual()" class="w-full flex items-center justify-between p-6 bg-white rounded-3xl border border-gray-100 shadow-sm active:scale-95 transition">
+                                <div class="text-left">
+                                    <p class="font-black text-gray-800">Sincronizar Escala</p>
+                                    <p class="text-[9px] text-gray-400 font-bold uppercase italic">Clique para atualizar a lista</p>
+                                </div>
+                                <div class="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+                                    <i class="fa-solid fa-cloud-arrow-down"></i>
+                                </div>
+                            </button>
+                        </section>
+                    </div>
+                `;
+            } else if (tab === 'escala') {
+                const filtrados = escalaDados.filter(i => 
+                    i.servo.toLowerCase().includes(searchTerm) || 
+                    i.culto.toLowerCase().includes(searchTerm)
+                );
+
+                main.innerHTML = `
+                    <div class="mb-6 sticky top-0 bg-white/90 backdrop-blur-md py-2 z-10">
+                        <div class="relative">
+                            <i class="fa-solid fa-magnifying-glass absolute left-5 top-1/2 -translate-y-1/2 text-gray-300"></i>
+                            <input type="text" oninput="updateSearch(this.value)" placeholder="BUSCAR NOME..." value="${searchTerm}"
+                                class="w-full pl-14 pr-6 py-4 bg-gray-100 rounded-[22px] border-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs uppercase outline-none">
+                        </div>
+                    </div>
+                    <div class="space-y-4 pb-32">
+                        ${filtrados.map(item => `
+                            <div class="bg-white border ${item.status === 'Confirmado' ? 'border-green-100 bg-green-50/10' : 'border-gray-100'} rounded-[30px] p-5">
+                                <div class="flex justify-between items-start mb-4">
+                                    <div class="flex items-center space-x-3">
+                                        <div class="w-10 h-10 ${item.status === 'Confirmado' ? 'bg-green-100 text-green-700' : 'bg-indigo-50 text-indigo-700'} rounded-xl flex flex-col items-center justify-center font-black leading-none">
+                                            <span class="text-sm">${item.data.split('/')[0]}</span>
+                                            <span class="text-[6px] uppercase">DEZ</span>
+                                        </div>
+                                        <div>
+                                            <h4 class="font-black text-gray-800 text-xs">${item.culto}</h4>
+                                            <p class="text-[8px] font-bold text-gray-400 uppercase">${item.local}</p>
+                                        </div>
+                                    </div>
+                                    <span class="text-[7px] px-2 py-1 rounded-full font-black uppercase tracking-tighter ${item.status === 'Confirmado' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">
+                                        ${item.status}
+                                    </span>
+                                </div>
+                                <div class="flex items-center justify-between pt-4 border-t border-gray-50">
+                                    <div class="flex items-center space-x-2">
+                                        <p class="text-[11px] font-black text-gray-700">${item.servo}</p>
+                                    </div>
+                                    ${item.status !== 'Confirmado' ? `
+                                        <button onclick="confirmarPresenca('${item.id}')" class="bg-indigo-950 text-white text-[9px] font-black px-4 py-2 rounded-xl active:scale-95">CONFIRMAR</button>
+                                    ` : `
+                                        <i class="fa-solid fa-circle-check text-green-500 text-lg"></i>
+                                    `}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else if (tab === 'equipe') {
+                const servos = [...new Set(escalaDados.map(i => i.servo))].sort();
+                main.innerHTML = `
+                    <h2 class="text-xl font-black text-gray-900 mb-6">Equipe M.A.N.</h2>
+                    <div class="grid grid-cols-1 gap-2 pb-32">
+                        ${servos.map(nome => `
+                            <div class="bg-white p-4 rounded-[22px] border border-gray-50 flex items-center space-x-4">
+                                <div class="w-8 h-8 bg-indigo-50 rounded-lg flex items-center justify-center font-black text-indigo-400 text-[10px]">
+                                    ${nome.charAt(0)}
+                                </div>
+                                <span class="font-black text-gray-700 text-xs">${nome}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+        };
+
+        window.changeTab = (tab) => {
+            document.querySelectorAll('.nav-tab').forEach(el => {
+                el.classList.remove('active-tab', 'text-indigo-900', 'bg-indigo-50');
+                el.classList.add('text-gray-300');
+            });
+            const activeBtn = document.getElementById('btn-' + tab);
+            activeBtn.classList.add('active-tab', 'text-indigo-900', 'bg-indigo-50');
+            activeBtn.classList.remove('text-gray-300');
+            renderContent(tab);
+        };
+
+        window.onload = initApp;
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #fff; -webkit-tap-highlight-color: transparent; }
+        .app-container { max-width: 450px; margin: 0 auto; min-height: 100vh; background: #fff; display: flex; flex-direction: column; }
+        .nav-tab { transition: all 0.2s ease; border-radius: 18px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+<div id="toast" class="fixed top-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl z-[500] text-[9px] font-black uppercase hidden"></div>
+
+<div class="app-container shadow-xl min-h-screen bg-white">
+    <header class="p-8 pb-4 sticky top-0 bg-white/80 backdrop-blur-md z-40">
+        <div class="flex justify-between items-center">
+            <div>
+                <p class="text-[7px] font-black uppercase tracking-[0.3em] text-indigo-400 italic">M.A.N. Digital</p>
+                <h1 class="text-xl font-black text-gray-900">Olá, Marcos</h1>
+            </div>
+            <div class="w-10 h-10 rounded-2xl bg-indigo-900 flex items-center justify-center text-white">
+                <i class="fa-solid fa-hands-praying text-xs"></i>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 px-8 overflow-y-auto" id="main-content">
+        <div class="flex flex-col items-center justify-center h-64">
+            <i class="fa-solid fa-spinner fa-spin text-indigo-200 text-2xl"></i>
+        </div>
+    </main>
+
+    <div class="fixed bottom-6 left-0 right-0 px-6 max-w-[450px] mx-auto z-50">
+        <nav class="bg-white border border-gray-100 p-1.5 rounded-[28px] shadow-2xl flex justify-between items-center">
+            <button id="btn-home" data-tab="home" onclick="changeTab('home')" class="nav-tab active-tab text-indigo-900 bg-indigo-50 px-5 py-3.5 flex items-center space-x-2">
+                <i class="fa-solid fa-house text-sm"></i>
+                <span class="text-[9px] font-black uppercase">Home</span>
+            </button>
+            <button id="btn-escala" data-tab="escala" onclick="changeTab('escala')" class="nav-tab text-gray-300 px-5 py-3.5">
+                <i class="fa-solid fa-calendar-days text-sm"></i>
+            </button>
+            <button id="btn-equipe" data-tab="equipe" onclick="changeTab('equipe')" class="nav-tab text-gray-300 px-5 py-3.5">
+                <i class="fa-solid fa-user-group text-sm"></i>
+            </button>
+        </nav>
+    </div>
+</div>
+
+</body>
+</html>
